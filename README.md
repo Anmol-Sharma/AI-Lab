@@ -33,8 +33,8 @@ numba
 
 ### Background Models
 
-* Adaptive Background Model
-* Three Frame Difference
+* [Adaptive Background Model](./Adaptive_Background.ipynb)
+* [Three Frame Difference](./Three_Frame_Diff.ipynb)
 
 ### Image Segmentation
 
