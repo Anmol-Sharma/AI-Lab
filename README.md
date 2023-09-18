@@ -38,15 +38,15 @@ numba
 
 ### Image Segmentation
 
-* Kmeans++
-* Mean Shift Algorithm
+* [Kmeans++](./Kmeans++.ipynb)
+* [Mean Shift Algorithm](./Mean_Shift.ipynb)
 
 ### GANs
 
-* MLP-GAN
-* Conditional GAN
-* Cycle GAN
+* [MLP-GAN](./MLP_GAN.ipynb)
+* [Conditional GAN](./Conditional_GAN.ipynb)
+* [Cycle GAN](./CycleGAN.ipynb)
 
 ### 3D Deep Learning
 
-* Point Net
+* [Point Net](./PointNet.ipynb)
