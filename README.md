@@ -49,5 +49,6 @@ numba
 
 ### 3D Deep Learning
 
+* [Point Net (Pytorch)](./PointNet (pytorch).ipynb)
 * [Point Net](./PointNet.ipynb)
 * [Point-MAE](./Pytorch_Implementations/Point-MAE.ipynb) (Still WIP)
