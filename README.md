@@ -10,7 +10,7 @@ This repo is just my own implementation of the various papers/ algorithms. The o
 
 ### NLP
 
-- [A Small LLM](./Pytorch_Implementations/)
+- [A Small LLM \(Pytorch\)](./Pytorch_Implementations/)
   - A small implementation of GPT-2 style LLM trained on wikipedia dataset.
 
 ### Background Models
@@ -25,11 +25,11 @@ This repo is just my own implementation of the various papers/ algorithms. The o
 
 ### GANs
 
-* [MLP-GAN](./MLP_GAN.ipynb)
-* [Conditional GAN](./Conditional_GAN.ipynb)
-* [Cycle GAN](./CycleGAN.ipynb)
+* [MLP-GAN \(Tensorflow\)](./MLP_GAN.ipynb)
+* [Conditional GAN \(Tensorflow\)](./Conditional_GAN.ipynb)
+* [Cycle GAN \(Tensorflow\)](./CycleGAN.ipynb)
 
 ### 3D Deep Learning
 
 * [Point Net \(Pytorch\)](./Pytorch_Implementations/PointNet.ipynb)
-* [Point Net](./PointNet.ipynb)
+* [Point Net \(Tensorflow\)](./PointNet.ipynb)
