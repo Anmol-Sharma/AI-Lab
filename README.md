@@ -1,35 +1,17 @@
-# Vision Lab
+# AI Lab
 
-This repo. contains my own impementations of various algorithms/ papers related to computer vision.
+This repo. contains my own impementations of various algorithms/ papers related to machine learning.
 
 ## Disclaimer
 
 This repo is just my own implementation of the various papers/ algorithms. The original research is not my work, and all the related work is linked
 
-## Required Package List
-
-Below is the list of packages required to execute all the notebook, feel free to install them using your preferred python package manager.
-
-```
-imageio
-ipython
-ipywidgets
-jupyterlab
-k3d
-jupyterlab-widgets
-matplotlib
-numpy
-scipy
-pandas
-scikit-learn
-tensorflow
-tensorflow-metal (optional)
-tqdm
-trimesh
-numba
-```
-
 ## List of Implementations
+
+### NLP
+
+- [A Small LLM](./Pytorch_Implementations/A Small LLM)
+  - A small implementation of GPT-2 style LLM trained on wikipedia dataset.
 
 ### Background Models
 
@@ -51,4 +33,3 @@ numba
 
 * [Point Net \(Pytorch\)](./Pytorch_Implementations/PointNet.ipynb)
 * [Point Net](./PointNet.ipynb)
-* [Point-MAE](./Pytorch_Implementations/Point-MAE.ipynb) (Still WIP)
