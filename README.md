@@ -10,7 +10,7 @@ This repo is just my own implementation of the various papers/ algorithms. The o
 
 ### NLP
 
-- [A Small LLM](./Pytorch_Implementations/A Small LLM)
+- [A Small LLM](./Pytorch_Implementations/A\ Small\ LLM)
   - A small implementation of GPT-2 style LLM trained on wikipedia dataset.
 
 ### Background Models
