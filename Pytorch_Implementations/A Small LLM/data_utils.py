@@ -1,6 +1,7 @@
 from torch.utils.data import Dataset
 import torch
-import random
+
+# import random
 from torch.nn.utils.rnn import pad_sequence
 
 
@@ -22,20 +23,33 @@ class TrainDataset(Dataset):
 
     def __getitem__(self, idx: int):
         text = self.dataset[idx].get("text", "")
-        tokens = self.tokenizer.encode(text, add_special_tokens=True)
+        tokens = self.tokenizer.encode(text)
 
-        if len(tokens) < self.min_length:
-            # Try a nearby item
-            new_idx = (idx + 1) % len(self.dataset)
-            return self.__getitem__(new_idx)
+        # Logic for taking sequences within a random range (min-max)
+        # if len(tokens) < self.min_length:
+        #     # Try a nearby item
+        #     new_idx = (idx + 1) % len(self.dataset)
+        #     return self.__getitem__(new_idx)
 
-        # Sample a random window
-        max_start = max(0, len(tokens) - self.min_length)
-        start = random.randint(
-            0, min(max_start, max(0, len(tokens) - self.max_seq_len))
-        )
-        end = min(start + self.max_seq_len, len(tokens))
-        tokens_window = tokens[start:end]
+        # # Sample a random window
+        # max_start = max(0, len(tokens) - self.min_length)
+        # start = random.randint(
+        #     0, min(max_start, max(0, len(tokens) - self.max_seq_len))
+        # )
+        # end = min(start + self.max_seq_len, len(tokens))
+        # tokens_window = tokens[start:end]
+
+        # input_ids = torch.tensor(tokens_window, dtype=torch.long)
+
+        # return {
+        #     "input_ids": input_ids,
+        # }
+
+        # Take full length if within max_seq_len, otherwise truncate from end
+        if len(tokens) <= self.max_seq_len:
+            tokens_window = tokens
+        else:
+            tokens_window = tokens[: self.max_seq_len]
 
         input_ids = torch.tensor(tokens_window, dtype=torch.long)
 

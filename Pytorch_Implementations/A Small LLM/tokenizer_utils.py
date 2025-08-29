@@ -1,105 +1,127 @@
 from tokenizers import Tokenizer
-from tokenizers.models import BPE
 from tokenizers.trainers import BpeTrainer
-from tokenizers.pre_tokenizers import Whitespace
-from tokenizers.processors import TemplateProcessing
+from tokenizers.pre_tokenizers import ByteLevel
+from tokenizers.models import BPE
 from transformers import PreTrainedTokenizerFast
 import os
+from tokenizers.decoders import ByteLevel as ByteLevelDecoder
+import unicodedata
+import re
+from tokenizers.processors import TemplateProcessing
 
 
-def __train_tokenizer(
+def __train_english_wikipedia_tokenizer(
     dataset,
-    vocab_size=32000,
+    vocab_size=30000,
     min_frequency=2,
     special_tokens=None,
-    batch_size=2500,
-    output_dir="./tokenizer",
+    batch_size=2400,
+    output_dir="./wikipedia_tokenizer",
 ):
-    """
-    Train a BPE tokenizer on a Hugging Face dataset with parquet files.
-    Args:
-        dataset: Hugging Face Dataset (with Text)
-        vocab_size: Size of the vocabulary
-        min_frequency: Minimum frequency for tokens
-        special_tokens: List of special tokens
-        batch_size: Batch size for processing
-        output_dir: Directory to save the tokenizer
-    """
     if special_tokens is None:
-        special_tokens = ["<unk>", "<bos>", "</eos>", "<pad>", "<mask>"]
+        special_tokens = ["<unk>", "<bos>", "<eos>", "<pad>", "<mask>"]
 
-    # Get the training split
-    train_dataset = dataset  # ['train']
-    print(f"Dataset loaded with {len(train_dataset)} rows")
-
-    # Initialize tokenizer with BPE model
+    # Use BPE with ByteLevel for maximum robustness
     tokenizer = Tokenizer(BPE(unk_token="<unk>"))
 
-    # Set pre-tokenizer (splits on whitespace)
-    # For now this will do, for code and other formats like xml, json we need byte level splits
-    # combined with whitespaces
-    tokenizer.pre_tokenizer = Whitespace()
+    tokenizer.pre_tokenizer = ByteLevel(add_prefix_space=False)
+    tokenizer.decoder = ByteLevelDecoder()
 
-    # Initialize the main BPE trainer
     trainer = BpeTrainer(
         vocab_size=vocab_size,
         min_frequency=min_frequency,
         special_tokens=special_tokens,
         show_progress=True,
+        initial_alphabet=ByteLevel.alphabet(),  # Important!
     )
 
-    # Yield batches to process
+    def clean_wikipedia_text(text):
+        """Robust cleaning for Wikipedia text"""
+        if not isinstance(text, str) or len(text.strip()) < 10:
+            return None
+
+        # Normalize unicode (fix some encoding issues)
+        text = unicodedata.normalize("NFKD", text)
+
+        # Remove or fix common mojibake patterns
+        # Common mojibake replacements
+        replacements = {
+            "Ã©": "é",
+            "Ã¨": "è",
+            "Ãª": "ê",
+            "Ã«": "ë",
+            "Ã¡": "á",
+            "Ã¢": "â",
+            "Ã£": "ã",
+            "Ã¤": "ä",
+            "Ã¥": "å",
+            "Ã­": "í",
+            "Ã®": "î",
+            "Ã¯": "ï",
+            "Ã³": "ó",
+            "Ã´": "ô",
+            "Ãµ": "õ",
+            "Ã¶": "ö",
+            "Ãº": "ú",
+            "Ã»": "û",
+            "Ã¼": "ü",
+            "Ã±": "ñ",
+            "Ã§": "ç",
+            # Add more as needed
+        }
+
+        for bad, good in replacements.items():
+            text = text.replace(bad, good)
+
+        # Remove excessive control characters
+        text = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]", "", text)
+
+        # Remove excessive whitespace
+        text = " ".join(text.split())
+
+        return text if len(text) >= 10 else None
+
     def batch_iterator():
         batch = []
-        for i, example in enumerate(train_dataset):
-            # Extract text from the 'text' column
-            text = example["text"]
-            if text and isinstance(text, str) and len(text.strip()) > 0:
-                batch.append(text)
+        processed = 0
 
-            # Yield batch when it reaches batch_size
+        for example in dataset:
+            text = example.get("text", "")
+            cleaned_text = clean_wikipedia_text(text)
+
+            if cleaned_text:
+                batch.append(cleaned_text)
+                processed += 1
+
             if len(batch) >= batch_size:
                 yield batch
                 batch = []
-        # Yield remaining items
+
         if batch:
             yield batch
 
-    print("Starting tokenizer training...")
-    # Train the tokenizer
+    print("Training tokenizer on English Wikipedia...")
     tokenizer.train_from_iterator(batch_iterator(), trainer=trainer)
 
-    # Add post-processor for proper formatting
+    print(f"Training completed. Final vocab size: {tokenizer.get_vocab_size()}")
+
+    # Post-processor
+    bos_id = tokenizer.token_to_id("<bos>")
+    eos_id = tokenizer.token_to_id("<eos>")
+
     tokenizer.post_processor = TemplateProcessing(
-        single="<bos> $A </eos>",
-        pair="<bos> $A </eos> $B:1 </eos>:1",
+        single="<bos> $A <eos>",
+        pair="<bos> $A <eos> $B:1 <eos>:1",
         special_tokens=[
-            ("<bos>", tokenizer.token_to_id("<bos>")),
-            ("</eos>", tokenizer.token_to_id("</eos>")),
+            ("<bos>", bos_id),
+            ("<eos>", eos_id),
         ],
     )
 
-    # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
-
-    # Save the tokenizer
     tokenizer.save(os.path.join(output_dir, "tokenizer.json"))
 
-    # Convert to HuggingFace tokenizer format
-    hf_tokenizer = PreTrainedTokenizerFast(
-        tokenizer_object=tokenizer,
-        unk_token="<unk>",
-        pad_token="<pad>",
-        bos_token="<bos>",
-        eos_token="</eos>",
-        mask_token="<mask>",
-    )
-    # Save HuggingFace tokenizer
-    hf_tokenizer.save_pretrained(output_dir)
-    print("Tokenizer training completed!")
-    print(f"Tokenizer saved to: {output_dir}")
-
-    return hf_tokenizer
+    return tokenizer
 
 
 def test_tokenizer(tokenizer, test_texts=None):
@@ -109,6 +131,7 @@ def test_tokenizer(tokenizer, test_texts=None):
         test_texts = [
             "Hello, how are you today?",
             "Machine learning and natural language processing are fascinating fields.",
+            "The Dark Lord: He who must not be named",
         ]
 
     print("\n" + "=" * 50)
@@ -139,13 +162,19 @@ def __load_existing_tokenizer(output_dir):
         tokenizer or None: Returns the loaded tokenizer if exists, None otherwise
     """
     tokenizer_json_path = os.path.join(output_dir, "tokenizer.json")
-    hf_tokenizer_path = os.path.join(output_dir, "tokenizer_config.json")
 
     # Check if both tokenizer files exist
-    if os.path.exists(tokenizer_json_path) and os.path.exists(hf_tokenizer_path):
+    if os.path.exists(tokenizer_json_path):
         try:
             # Load the HuggingFace tokenizer
             hf_tokenizer = PreTrainedTokenizerFast.from_pretrained(output_dir)
+            # Explicitly tell it which tokens are special
+            hf_tokenizer.pad_token = "<pad>"
+            hf_tokenizer.unk_token = "<unk>"
+            hf_tokenizer.bos_token = "<bos>"
+            hf_tokenizer.eos_token = "<eos>"
+            hf_tokenizer.mask_token = "<mask>"
+
             print(f"Loaded existing tokenizer from {output_dir}")
             return hf_tokenizer
         except Exception as e:
@@ -178,6 +207,6 @@ def get_or_train_tokenizer(dataset, vocab_size, output_dir="./tokenizer_output")
     else:
         # Train new tokenizer if none exists
         print("Training new tokenizer...")
-        return __train_tokenizer(
+        return __train_english_wikipedia_tokenizer(
             dataset=dataset, vocab_size=vocab_size, output_dir=output_dir
         )

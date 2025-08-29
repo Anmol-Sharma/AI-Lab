@@ -1,27 +1,25 @@
-# Run using :- torchrun --nproc_per_node=2 train.py
-# Modify the parameter depending on the number of GPUs available
-
 import os
 from datasets import load_dataset
+from .model import LLM_Model
 from tokenizer_utils import get_or_train_tokenizer
-from model import LLM_Model
 import torch
 
 EMBED_DIM = 768
-VOCAB_SIZE = 32000
+VOCAB_SIZE = 28000
 NUM_HEADS = 12
-BLOCKS = 12
-LR = 0.0003
+BLOCKS = 14
+LR = 0.0005
 LR_DECAY_GAMMA = 0.9
 TRAIN_EPOCHS = 4
-
+TRAIN_BATCH_SIZE = 24
+VALIDATION_BATCH_SIZE = TRAIN_BATCH_SIZE // 2
 
 # Define this for tokenizer parallelism
 os.environ["TOKENIZERS_PARALLELISM"] = "1"
 
 device = "cpu"
-if torch.cuda.is_available():
-    device = torch.device("cuda")
+if torch.mps.is_available():
+    device = torch.device("mps")
 print("Device in use :", device)
 
 
@@ -38,24 +36,15 @@ def get_trained_tokenizer():
 if __name__ == "__main__":
     tokenizer = get_trained_tokenizer()
 
-    rank = int(os.environ["RANK"])
-    world_size = int(os.environ["WORLD_SIZE"])
-
-    print(f"WORLD Size: {world_size}")
-
-    torch.cuda.set_device(rank)
-    torch.distributed.init_process_group(
-        backend="nccl", rank=rank, world_size=world_size
-    )
-
-    # Update the dataset for train/ validation split
+    # Load the dataset for train/ validation split
     train_dataset = load_dataset(
         "wikimedia/wikipedia", name="20231101.en", split="train[:85%]", num_proc=4
     )
+
     validation_dataset = load_dataset(
         "wikimedia/wikipedia",
         name="20231101.en",
-        split="train[85%:90%]",
+        split="train[85%:88%]",
         num_proc=2,
     )
 
@@ -70,13 +59,15 @@ if __name__ == "__main__":
         tokenizer=tokenizer,
         max_lr=LR,
         lr_decay_exp=LR_DECAY_GAMMA,
-        world_size=world_size,
-        rank=rank,
     )
+
+    # llm_model.model_summary()
 
     llm_model.train(
         dataset=train_dataset,
         validation_dataset=validation_dataset,
-        train_batch_size=32,
-        val_batch_size=8,
+        train_batch_size=TRAIN_BATCH_SIZE,
+        val_batch_size=VALIDATION_BATCH_SIZE,
+        train_max_seq_len=256,
+        validation_max_seq_len=256,
     )

@@ -6,11 +6,8 @@ from torch import optim
 from torchinfo import summary
 from torch.optim.lr_scheduler import ExponentialLR
 
-from data_utils import TrainDataset, collate_fn
+from ..data_utils import TrainDataset, collate_fn
 from torch.utils.data import DataLoader
-
-from torch.amp import autocast, GradScaler
-from torch.nn.parallel import DistributedDataParallel as DDP
 
 
 class EmbeddingLayers(nn.Module):
@@ -164,8 +161,6 @@ class LLM_Model:
         epochs,
         device,
         tokenizer,
-        world_size,
-        rank,
         max_lr=0.0004,
         lr_decay_exp=0.9,
     ):
@@ -178,8 +173,6 @@ class LLM_Model:
         self.vocab_size = vocab_size
         self.tokenizer = tokenizer
         self.n_blocks = n_blocks
-        self.world_size = world_size
-        self.rank = rank
 
         print("Creating and Compiling the Model...")
         self.llm = torch.compile(
@@ -193,8 +186,6 @@ class LLM_Model:
         )
         print("Compilation Finished!")
 
-        self.llm = DDP(self.llm, device_ids=[self.rank])
-
         # Define optimizer and scheduler
         self.optimizer = optim.AdamW(self.llm.parameters(), lr=self.learning_rate)
         self.scheduler = ExponentialLR(self.optimizer, gamma=lr_decay_exp)
@@ -202,35 +193,34 @@ class LLM_Model:
         # Loss function
         # Here ignore -100 (used for my padding tokens)
         self.loss_fn = nn.CrossEntropyLoss(ignore_index=-100)
-        self.scaler = GradScaler()
 
     def train(
-        self, dataset, validation_dataset, train_batch_size=24, val_batch_size=16
+        self,
+        dataset,
+        validation_dataset,
+        train_batch_size=24,
+        val_batch_size=16,
+        train_max_seq_len=300,
+        validation_max_seq_len=300,
     ):
-        print("Starting Training!")
+        print("Starting Training!\n")
         ds = TrainDataset(
-            tokenizer=self.tokenizer, dataset=dataset, max_seq_len=768, min_length=10
+            tokenizer=self.tokenizer,
+            dataset=dataset,
+            max_seq_len=train_max_seq_len,
+            min_length=15,
         )
 
         val_ds = TrainDataset(
             tokenizer=self.tokenizer,
             dataset=validation_dataset,
-            max_seq_len=768,
-            min_length=8,
-        )
-
-        train_sampler = torch.utils.data.distributed.DistributedSampler(
-            ds, num_replicas=self.world_size, rank=self.rank, shuffle=True
-        )
-
-        val_sampler = torch.utils.data.distributed.DistributedSampler(
-            val_ds, num_replicas=self.world_size, rank=self.rank, shuffle=False
+            max_seq_len=validation_max_seq_len,
+            min_length=15,
         )
 
         train_loader = DataLoader(
             ds,
             batch_size=train_batch_size,
-            sampler=train_sampler,
             collate_fn=partial(collate_fn, pad_token_id=self.tokenizer.pad_token_id),
             num_workers=1,
         )
@@ -238,52 +228,40 @@ class LLM_Model:
         val_loader = DataLoader(
             val_ds,
             batch_size=val_batch_size,
-            sampler=val_sampler,
             collate_fn=partial(collate_fn, pad_token_id=self.tokenizer.pad_token_id),
             num_workers=1,
         )
 
-        save_dir = "models"
-        if self.rank == 0:
-            os.makedirs(save_dir, exist_ok=True)
-        torch.distributed.barrier()
+        save_dir = "trained models/v0"
+        os.makedirs(save_dir, exist_ok=True)
 
         start_epoch = self.load_checkpoint(save_dir)
 
         for epoch in range(start_epoch, self.epochs + 1):
-            train_sampler.set_epoch(epoch)
             for batch_idx, batch_ex in enumerate(train_loader):
                 data = batch_ex["input_ids"].to(self.device)
                 labels = batch_ex["labels"].to(self.device)
 
                 self.optimizer.zero_grad()
+                logits = self.llm(data)
+                loss = self.loss_fn(logits.view(-1, self.vocab_size), labels.view(-1))
 
-                # Mixed precision context using bfloat16
-                with autocast(device_type="cuda", dtype=torch.bfloat16):
-                    logits = self.llm(data)
-                    loss = self.loss_fn(
-                        logits.view(-1, self.vocab_size), labels.view(-1)
-                    )
-
-                if batch_idx % 2500 == 0:
+                if batch_idx % 100 == 0:
                     print(
-                        f"Epoch: {epoch} batch: {batch_idx + 1} train loss: {loss.item():.5f}"
+                        f"Epoch: {epoch} batch: {batch_idx + 1} train loss: {loss.item():.4f}"
                     )
+                if batch_idx % 1000 == 0:
                     self.save_model(save_dir=save_dir, epoch=epoch)
 
-                # loss.backward()
-                # Scale gradients and perform backprop
-                self.scaler.scale(loss).backward()
+                loss.backward()
 
                 # Gradient clipping
-                self.scaler.unscale_(self.optimizer)
                 torch.nn.utils.clip_grad_norm_(self.llm.parameters(), max_norm=1.0)
 
-                # self.optimizer.step()
-                # Update optimizer and scale the loss scaler
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
+                # Perform a step
+                self.optimizer.step()
 
+            print(f"End of Epoch {epoch}\nRunning Validation Tests!\n")
             self.save_model(save_dir=save_dir, epoch=epoch)
 
             # After the inner training loop
@@ -300,13 +278,10 @@ class LLM_Model:
                     )
                     val_loss += loss_val.item()
                 avg_val_loss = val_loss / len(val_loader)
-                print(f"Epoch {epoch} - Validation Loss: {avg_val_loss:.4f}")
+                print(f"Epoch {epoch} - Validation Loss: {avg_val_loss:.4f}\n")
             self.llm.train()  # Restore to training mode
 
             self.scheduler.step()
-
-        # Training Finished, cleaning up
-        torch.utils.data.distributed.destroy_process_group()
 
     def model_summary(self):
         print(summary(self.llm, input_size=(1, self.embed_dim), dtypes=[torch.int32]))
@@ -325,34 +300,38 @@ class LLM_Model:
                 checkpoint_files, key=lambda x: int(x.split("_")[2].split(".")[0])
             )
             checkpoint_path = os.path.join(save_dir, latest_checkpoint)
-            print(f"Loading checkpoint from {checkpoint_path}")
+            print(f"Loading checkpoint from {checkpoint_path}\n")
             checkpoint = torch.load(checkpoint_path, map_location=self.device)
 
-            self.llm.module.load_state_dict(checkpoint["model_state_dict"])
+            self.llm.load_state_dict(checkpoint["model_state_dict"])
             self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
             self.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
 
-            start_epoch = checkpoint["epoch"] + 1
+            # TODO: Temp. solution, enable the line below afterwards
+            start_epoch = checkpoint["completed_epochs"]
+            # start_epoch = checkpoint["completed_epochs"] + 1
             return start_epoch
         else:
             return 1
 
     def save_model(self, save_dir, epoch):
-        if self.rank == 0:
-            # Save model after each epoch
-            save_path = os.path.join(save_dir, f"model_epoch_{epoch}.pt")
-            torch.save(
-                {
-                    "epoch": epoch,
-                    "model_state_dict": self.llm.module.state_dict(),
-                    "optimizer_state_dict": self.optimizer.state_dict(),
-                    "scheduler_state_dict": self.scheduler.state_dict(),
-                },
-                save_path,
-            )
-            print(f"Saved model {save_path}")
+        # Save model after each epoch
+        save_path = os.path.join(save_dir, f"model_epoch_{epoch}.pt")
+        torch.save(
+            {
+                "completed_epochs": epoch,
+                "model_state_dict": self.llm.state_dict(),
+                "optimizer_state_dict": self.optimizer.state_dict(),
+                "scheduler_state_dict": self.scheduler.state_dict(),
+            },
+            save_path,
+        )
+        print(f"Saved model. Path: {save_path}")
 
     def generate_text(self, prompt, max_len=50):
+        # Temporarily disable torch.compile for generation
+        self.llm = self.llm._orig_mod if hasattr(self.llm, "_orig_mod") else self.llm
+
         inputs = self.tokenizer(
             prompt, return_tensors="pt", padding=False, truncation=True
         ).to(self.device)
@@ -362,7 +341,7 @@ class LLM_Model:
         for _ in range(max_len):
             with torch.no_grad():
                 outputs = self.llm(input_tokens)
-                next_token_logits = outputs[:, -1, :]  # Last token's logits
+                next_token_logits = outputs[:, -1, :]
                 next_token_id = torch.argmax(next_token_logits, dim=-1).unsqueeze(-1)
                 generated_ids.append(next_token_id)
                 input_tokens = torch.cat([input_tokens, next_token_id], dim=1)
@@ -370,4 +349,7 @@ class LLM_Model:
         generated_text = self.tokenizer.decode(
             torch.cat(generated_ids, dim=1)[0], skip_special_tokens=True
         )
+        # Re-enable torch.compile if needed
+        # self.llm = torch.compile(self.llm)  # Only if you want to recompile later
+
         return generated_text
